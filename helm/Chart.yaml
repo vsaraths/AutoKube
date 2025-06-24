@@ -1,0 +1,19 @@
+apiVersion: v2
+name: autokube
+description: AutoKube - AI-powered Kubernetes troubleshooting and auto-remediation tool
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - kubernetes
+  - troubleshooting
+  - ai
+  - automation
+  - sre
+  - devops
+home: https://github.com/your-org/autokube
+sources:
+  - https://github.com/your-org/autokube
+maintainers:
+  - name: Sarath
+    email: sarath@example.com

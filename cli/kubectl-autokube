@@ -1,0 +1,217 @@
+#!/bin/bash
+
+# kubectl-autokube - AI-powered Kubernetes troubleshooting CLI
+# Usage: kubectl autokube <command> [options]
+
+set -e
+
+NAMESPACE=${KUBECTL_PLUGINS_CURRENT_NAMESPACE:-default}
+AUTOKUBE_SERVICE="autokube"
+AUTOKUBE_PORT="8080"
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Helper functions
+log_info() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+log_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
+log_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+log_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+# Check if AutoKube is deployed
+check_deployment() {
+    if ! kubectl get service $AUTOKUBE_SERVICE -n $NAMESPACE >/dev/null 2>&1; then
+        log_error "AutoKube not found in namespace '$NAMESPACE'"
+        log_info "Install it using: helm install autokube ./helm"
+        exit 1
+    fi
+}
+
+# Make API call to AutoKube
+api_call() {
+    local endpoint=$1
+    local method=${2:-GET}
+    local data=${3:-}
+    
+    local port_forward_pid
+    kubectl port-forward service/$AUTOKUBE_SERVICE $AUTOKUBE_PORT:$AUTOKUBE_PORT -n $NAMESPACE >/dev/null 2>&1 &
+    port_forward_pid=$!
+    
+    sleep 2
+    
+    local curl_cmd="curl -s -X $method http://localhost:$AUTOKUBE_PORT$endpoint"
+    if [ -n "$data" ]; then
+        curl_cmd="$curl_cmd -H 'Content-Type: application/json' -d '$data'"
+    fi
+    
+    local response=$(eval $curl_cmd)
+    kill $port_forward_pid >/dev/null 2>&1
+    
+    echo "$response"
+}
+
+# Command functions
+cmd_detect() {
+    local target_namespace=${1:-$NAMESPACE}
+    log_info "Detecting issues in namespace: $target_namespace"
+    
+    check_deployment
+    
+    local response=$(api_call "/api/detect" "POST" "{\"namespace\":\"$target_namespace\"}")
+    echo "$response" | jq -r '.issues[] | "❌ \(.severity | ascii_upcase): \(.title) - \(.description)"'
+    
+    local issue_count=$(echo "$response" | jq -r '.issues | length')
+    if [ "$issue_count" -eq 0 ]; then
+        log_success "No issues detected in namespace '$target_namespace'"
+    else
+        log_warning "Found $issue_count issues in namespace '$target_namespace'"
+    fi
+}
+
+cmd_fix() {
+    local auto_mode=false
+    local target_namespace=$NAMESPACE
+    
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --auto)
+                auto_mode=true
+                shift
+                ;;
+            --namespace=*)
+                target_namespace="${1#*=}"
+                shift
+                ;;
+            *)
+                log_error "Unknown option: $1"
+                exit 1
+                ;;
+        esac
+    done
+    
+    log_info "Fixing issues in namespace: $target_namespace (auto: $auto_mode)"
+    
+    check_deployment
+    
+    local response=$(api_call "/api/fix" "POST" "{\"namespace\":\"$target_namespace\",\"auto\":$auto_mode}")
+    echo "$response" | jq -r '.fixes[] | "✅ \(.action): \(.description)"'
+    
+    local fix_count=$(echo "$response" | jq -r '.fixes | length')
+    if [ "$fix_count" -eq 0 ]; then
+        log_info "No fixes applied"
+    else
+        log_success "Applied $fix_count fixes in namespace '$target_namespace'"
+    fi
+}
+
+cmd_status() {
+    log_info "Checking AutoKube status"
+    
+    check_deployment
+    
+    local response=$(api_call "/api/status")
+    echo "$response" | jq -r '"Status: \(.status)\nVersion: \(.version)\nUptime: \(.uptime)\nAI Enabled: \(.ai_enabled)\nAuto Remediation: \(.auto_remediation)"'
+}
+
+cmd_logs() {
+    local follow=false
+    local lines=100
+    
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -f|--follow)
+                follow=true
+                shift
+                ;;
+            --lines=*)
+                lines="${1#*=}"
+                shift
+                ;;
+            *)
+                log_error "Unknown option: $1"
+                exit 1
+                ;;
+        esac
+    done
+    
+    log_info "Fetching AutoKube logs (lines: $lines, follow: $follow)"
+    
+    if [ "$follow" = true ]; then
+        kubectl logs -f deployment/$AUTOKUBE_SERVICE -n $NAMESPACE --tail=$lines
+    else
+        kubectl logs deployment/$AUTOKUBE_SERVICE -n $NAMESPACE --tail=$lines
+    fi
+}
+
+cmd_help() {
+    cat << EOF
+kubectl autokube - AI-powered Kubernetes troubleshooting CLI
+
+USAGE:
+    kubectl autokube <command> [options]
+
+COMMANDS:
+    detect [namespace]              Detect issues in the specified namespace
+    fix [--auto] [--namespace=ns]   Fix detected issues (optionally auto-apply)
+    status                          Show AutoKube status
+    logs [-f] [--lines=N]          Show AutoKube logs
+    help                           Show this help message
+
+EXAMPLES:
+    kubectl autokube detect production
+    kubectl autokube fix --auto --namespace=staging
+    kubectl autokube status
+    kubectl autokube logs -f --lines=50
+
+INSTALLATION:
+    helm install autokube ./helm
+
+For more information, visit: https://github.com/your-org/autokube
+EOF
+}
+
+# Main command dispatcher
+main() {
+    case "${1:-help}" in
+        detect)
+            shift
+            cmd_detect "$@"
+            ;;
+        fix)
+            shift
+            cmd_fix "$@"
+            ;;
+        status)
+            cmd_status
+            ;;
+        logs)
+            shift
+            cmd_logs "$@"
+            ;;
+        help|--help|-h)
+            cmd_help
+            ;;
+        *)
+            log_error "Unknown command: $1"
+            cmd_help
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"
