@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Bot, Send, Loader2, AlertTriangle, CheckCircle, Code, Copy, MessageSquare, Zap, Brain } from 'lucide-react';
 import Editor from "@monaco-editor/react";
 import { parse, stringify } from 'yaml';
 import { z } from 'zod';
+import api from '../../services/api';
 
 // Schema for basic Kubernetes resource validation
 const k8sResourceSchema = z.object({
@@ -21,6 +22,7 @@ const TroubleshootingAI: React.FC = () => {
   const [showYamlEditor, setShowYamlEditor] = useState(false);
   const [yamlContent, setYamlContent] = useState('');
   const [yamlError, setYamlError] = useState<string | null>(null);
+  const [chatHistory, setChatHistory] = useState<any[]>([]);
   
   const mockChat = [
     { 
@@ -55,43 +57,84 @@ spec:
         confidence: 95,
         estimatedFixTime: '30s'
       }
-    },
-    { 
-      role: 'user', 
-      content: 'What about the API server connection issues?',
-      timestamp: new Date(Date.now() - 180000).toISOString()
-    },
-    { 
-      role: 'assistant', 
-      content: 'The API server connection failures are caused by network connectivity issues. I\'ve detected that the kubelet on worker nodes cannot reach the API server at 10.96.0.1:443. This requires immediate attention as it affects cluster stability.',
-      timestamp: new Date(Date.now() - 120000).toISOString(),
-      suggestedFix: {
-        type: 'network_remediation',
-        yaml: `# Check network connectivity and restart kubelet
-apiVersion: v1
-kind: Pod
-metadata:
-  name: network-debug
-spec:
-  containers:
-  - name: debug
-    image: nicolaka/netshoot
-    command: ["sleep", "3600"]`,
-        confidence: 87,
-        estimatedFixTime: '2m'
-      }
     }
   ];
+
+  useEffect(() => {
+    // Initialize chat with mock data
+    setChatHistory(mockChat);
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!query.trim()) return;
     
+    // Add user message to chat
+    const userMessage = {
+      role: 'user',
+      content: query,
+      timestamp: new Date().toISOString()
+    };
+    
+    setChatHistory(prev => [...prev, userMessage]);
     setIsLoading(true);
-    // Simulate AI analysis of real Kubernetes errors
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    setIsLoading(false);
     setQuery('');
+    
+    try {
+      // Simulate logs for the query
+      const logs = [
+        `E0609 05:23:17.678901    1 pod_workers.go:190] Error syncing pod default/nginx-deployment-5c689d8b4b-jx3wp, skipping: failed to "StartContainer" for "nginx" with CrashLoopBackOff: "back-off 5m0s restarting failed container=nginx pod=nginx-deployment-5c689d8b4b-jx3wp_default(1234abcd-5678-90ef-ghij-klmnopqrstuv)"`,
+        `E0609 05:23:18.987654    1 horizontal.go:101] failed to compute desired number of replicas based on CPU utilization: unable to get metrics for resource cpu: no metrics returned from resource metrics API`
+      ];
+      
+      // Call the backend API
+      const response = await api.ai.diagnose(logs, "default", { query });
+      
+      // Create AI response
+      const aiResponse = {
+        role: 'assistant',
+        content: `I've analyzed your logs and detected a ${response.issue} issue. ${response.suggestion}`,
+        timestamp: new Date().toISOString(),
+        suggestedFix: {
+          type: 'resource_adjustment',
+          yaml: `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+  namespace: default
+spec:
+  template:
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.21
+        resources:
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+          requests:
+            memory: "256Mi"
+            cpu: "250m"`,
+          confidence: response.confidence * 100,
+          estimatedFixTime: '30s'
+        }
+      };
+      
+      setChatHistory(prev => [...prev, aiResponse]);
+    } catch (error) {
+      console.error('Error diagnosing issue:', error);
+      
+      // Add error message
+      const errorMessage = {
+        role: 'assistant',
+        content: 'Sorry, I encountered an error while analyzing your logs. Please try again later.',
+        timestamp: new Date().toISOString()
+      };
+      
+      setChatHistory(prev => [...prev, errorMessage]);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleYamlChange = (value: string | undefined) => {
@@ -152,7 +195,7 @@ spec:
       </div>
       
       <div className="flex-1 overflow-auto p-4 space-y-4 bg-gray-50 dark:bg-gray-900/50">
-        {mockChat.map((message, index) => (
+        {chatHistory.map((message, index) => (
           <div 
             key={index} 
             className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}

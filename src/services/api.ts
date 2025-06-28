@@ -52,6 +52,11 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ autoApprove }),
       }),
+    diagnose: (logs: string[], namespace: string = "default", context = {}) =>
+      fetchWithAuth('/diagnose', {
+        method: 'POST',
+        body: JSON.stringify({ logs, namespace, context }),
+      }),
   },
   
   // AI analysis
@@ -61,6 +66,11 @@ export const api = {
     getPredictions: (namespace: string) => 
       fetchWithAuth(`/ai/predict?namespace=${namespace}`),
     getRecommendations: () => fetchWithAuth('/ai/recommendations'),
+    diagnose: (logs: string[], namespace: string = "default", context = {}) =>
+      fetchWithAuth('/diagnose', {
+        method: 'POST',
+        body: JSON.stringify({ logs, namespace, context }),
+      }),
   },
   
   // Security
