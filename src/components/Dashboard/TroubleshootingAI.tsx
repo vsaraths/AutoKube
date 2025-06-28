@@ -3,7 +3,6 @@ import { Bot, Send, Loader2, AlertTriangle, CheckCircle, Code, Copy, MessageSqua
 import Editor from "@monaco-editor/react";
 import { parse, stringify } from 'yaml';
 import { z } from 'zod';
-import api from '../../services/api';
 
 // Schema for basic Kubernetes resource validation
 const k8sResourceSchema = z.object({
@@ -88,12 +87,24 @@ spec:
       ];
       
       // Call the backend API
-      const response = await api.ai.diagnose(logs, "default", { query });
+      const response = await fetch('/api/diagnose', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ logs, namespace: "default", context: { query } }),
+      });
+      
+      if (!response.ok) {
+        throw new Error(`API error: ${response.status}`);
+      }
+      
+      const data = await response.json();
       
       // Create AI response
       const aiResponse = {
         role: 'assistant',
-        content: `I've analyzed your logs and detected a ${response.issue} issue. ${response.suggestion}`,
+        content: `I've analyzed your logs and detected a ${data.issue} issue. ${data.suggestion}`,
         timestamp: new Date().toISOString(),
         suggestedFix: {
           type: 'resource_adjustment',
@@ -115,7 +126,7 @@ spec:
           requests:
             memory: "256Mi"
             cpu: "250m"`,
-          confidence: response.confidence * 100,
+          confidence: data.confidence * 100,
           estimatedFixTime: '30s'
         }
       };
